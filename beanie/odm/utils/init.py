@@ -1,6 +1,8 @@
 import asyncio
 import sys
 
+from typing_extensions import Sequence, get_args, get_origin
+
 from beanie.odm.utils.pydantic import (
     IS_PYDANTIC_V2,
     get_extra_field_info,
@@ -8,11 +10,6 @@ from beanie.odm.utils.pydantic import (
     parse_model,
 )
 from beanie.odm.utils.typing import get_index_attributes
-
-if sys.version_info >= (3, 8):
-    from typing import get_args, get_origin
-else:
-    from typing_extensions import get_args, get_origin
 
 if sys.version_info >= (3, 10):
     from types import UnionType as TypesUnionType
@@ -50,7 +47,7 @@ from beanie.odm.registry import DocsRegistry
 from beanie.odm.settings.document import DocumentSettings, IndexModelField
 from beanie.odm.settings.union_doc import UnionDocSettings
 from beanie.odm.settings.view import ViewSettings
-from beanie.odm.union_doc import UnionDoc
+from beanie.odm.union_doc import UnionDoc, UnionDocType
 from beanie.odm.views import View
 
 
@@ -65,29 +62,34 @@ class Initializer:
         database: AsyncIOMotorDatabase = None,
         connection_string: Optional[str] = None,
         document_models: Optional[
-            List[Union[Type["DocType"], Type["View"], str]]
+            Sequence[
+                Union[Type["DocType"], Type["UnionDocType"], Type["View"], str]
+            ]
         ] = None,
         allow_index_dropping: bool = False,
         recreate_views: bool = False,
         multiprocessing_mode: bool = False,
+        skip_indexes: bool = False,
     ):
         """
         Beanie initializer
 
         :param database: AsyncIOMotorDatabase - motor database instance
         :param connection_string: str - MongoDB connection string
-        :param document_models: List[Union[Type[DocType], str]] - model classes
+        :param document_models: List[Union[Type[DocType], Type[UnionDocType], str]] - model classes
         or strings with dot separated paths
         :param allow_index_dropping: bool - if index dropping is allowed.
         Default False
         :param recreate_views: bool - if views should be recreated. Default False
         :param multiprocessing_mode: bool - if multiprocessing mode is on
         it will patch the motor client to use process's event loop.
+        :param skip_indexes: bool - if you want to skip working with indexes. Default False
         :return: None
         """
 
         self.inited_classes: List[Type] = []
         self.allow_index_dropping = allow_index_dropping
+        self.skip_indexes = skip_indexes
         self.recreate_views = recreate_views
 
         self.models_with_updated_forward_refs: List[Type[BaseModel]] = []
@@ -117,7 +119,9 @@ class Initializer:
             ModelType.View: 2,
         }
 
-        self.document_models: List[Union[Type[DocType], Type[View]]] = [
+        self.document_models: List[
+            Union[Type[DocType], Type[UnionDocType], Type[View]]
+        ] = [
             self.get_model(model) if isinstance(model, str) else model
             for model in document_models
         ]
@@ -418,7 +422,7 @@ class Initializer:
                     link_info.is_fetchable = False
                     cls._link_fields[k] = link_info
 
-        cls.check_hidden_fields()
+        cls._check_hidden_fields()
 
     @staticmethod
     def init_actions(cls):
@@ -605,7 +609,8 @@ class Initializer:
                 cls._inheritance_inited = True
 
             await self.init_document_collection(cls)
-            await self.init_indexes(cls, self.allow_index_dropping)
+            if not self.skip_indexes:
+                await self.init_indexes(cls, self.allow_index_dropping)
             self.init_document_fields(cls)
             self.init_cache(cls)
             self.init_actions(cls)
@@ -757,24 +762,27 @@ async def init_beanie(
     database: AsyncIOMotorDatabase = None,
     connection_string: Optional[str] = None,
     document_models: Optional[
-        List[Union[Type[Document], Type["View"], str]]
+        Sequence[Union[Type[Document], Type[UnionDoc], Type["View"], str]]
     ] = None,
     allow_index_dropping: bool = False,
     recreate_views: bool = False,
     multiprocessing_mode: bool = False,
+    skip_indexes: bool = False,
 ):
     """
     Beanie initialization
 
     :param database: AsyncIOMotorDatabase - motor database instance
     :param connection_string: str - MongoDB connection string
-    :param document_models: List[Union[Type[DocType], str]] - model classes
+    :param document_models: List[Union[Type[DocType], Type[UnionDocType], str]] - model classes
     or strings with dot separated paths
     :param allow_index_dropping: bool - if index dropping is allowed.
     Default False
     :param recreate_views: bool - if views should be recreated. Default False
     :param multiprocessing_mode: bool - if multiprocessing mode is on
         it will patch the motor client to use process's event loop. Default False
+    :param skip_indexes: bool - if you want to skip working with the indexes.
+        Default False
     :return: None
     """
 
@@ -785,4 +793,5 @@ async def init_beanie(
         allow_index_dropping=allow_index_dropping,
         recreate_views=recreate_views,
         multiprocessing_mode=multiprocessing_mode,
+        skip_indexes=skip_indexes,
     )

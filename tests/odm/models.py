@@ -996,7 +996,9 @@ class DocumentWithListOfLinks(Document):
 
 
 class DocumentWithTimeStampToTestConsistency(Document):
-    ts: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    ts: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
 
 
 class DocumentWithIndexMerging1(Document):
@@ -1143,11 +1145,26 @@ class LongSelfLink(Document):
         max_nesting_depth = 50
 
 
+class DictEnum(str, Enum):
+    RED = "Red"
+    BLUE = "Blue"
+
+
+class DocumentWithEnumKeysDict(Document):
+    color: Dict[DictEnum, str]
+
+
 class BsonRegexDoc(Document):
     regex: Optional[Regex] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    if IS_PYDANTIC_V2:
+        model_config = ConfigDict(
+            arbitrary_types_allowed=True,
+        )
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
 
 
 class NativeRegexDoc(Document):
