@@ -7,24 +7,26 @@ import operator
 import pathlib
 import re
 import uuid
-from enum import Enum
-from typing import (
-    Any,
+from collections.abc import (
     Callable,
     Container,
     Iterable,
     Mapping,
     MutableMapping,
-    Optional,
-    Tuple,
 )
+from enum import Enum
+from typing import Any
 
 import bson
 import pydantic
+from pydantic import AnyUrl
+from pydantic_core import Url
 
 import beanie
 from beanie.odm.fields import Link, LinkTypes
-from beanie.odm.utils.pydantic import IS_PYDANTIC_V2, get_model_fields
+from beanie.odm.utils.pydantic import (
+    get_model_fields,
+)
 
 SingleArgCallable = Callable[[Any], Any]
 DEFAULT_CUSTOM_ENCODERS: MutableMapping[type, SingleArgCallable] = {
@@ -45,11 +47,9 @@ DEFAULT_CUSTOM_ENCODERS: MutableMapping[type, SingleArgCallable] = {
     decimal.Decimal: bson.Decimal128,
     uuid.UUID: bson.Binary.from_uuid,
     re.Pattern: bson.Regex.from_native,
+    Url: str,
+    AnyUrl: str,
 }
-if IS_PYDANTIC_V2:
-    from pydantic_core import Url
-
-    DEFAULT_CUSTOM_ENCODERS[Url] = str
 
 BSON_SCALAR_TYPES = (
     type(None),
@@ -74,6 +74,7 @@ class Encoder:
     """
 
     exclude: Container[str] = frozenset()
+    include: Container[str] = frozenset()
     custom_encoders: Mapping[type, SingleArgCallable] = dc.field(
         default_factory=dict
     )
@@ -127,7 +128,7 @@ class Encoder:
 
         if isinstance(obj, beanie.Document):
             return self._encode_document(obj)
-        if IS_PYDANTIC_V2 and isinstance(obj, pydantic.RootModel):
+        if isinstance(obj, pydantic.RootModel):
             return self.encode(obj.root)
         if isinstance(obj, pydantic.BaseModel):
             items = self._iter_model_items(obj)
@@ -144,20 +145,33 @@ class Encoder:
 
     def _iter_model_items(
         self, obj: pydantic.BaseModel
-    ) -> Iterable[Tuple[str, Any]]:
-        exclude, keep_nulls = self.exclude, self.keep_nulls
+    ) -> Iterable[tuple[str, Any]]:
+        keep_nulls = self.keep_nulls
         get_model_field = get_model_fields(obj).get
         for key, value in obj.__iter__():
             field_info = get_model_field(key)
             if field_info is not None:
                 key = field_info.alias or key
-            if key not in exclude and (value is not None or keep_nulls):
+            if not self._should_exclude_field(key, field_info) and (
+                value is not None or keep_nulls
+            ):
                 yield key, value
+
+    def _should_exclude_field(
+        self, key: str, field_info: pydantic.fields.FieldInfo | None
+    ):
+        if key in self.include:
+            return False
+
+        is_pydantic_excluded_field = (
+            field_info is not None and field_info.exclude is True
+        )
+        return key in self.exclude or is_pydantic_excluded_field
 
 
 def _get_encoder(
     obj: Any, custom_encoders: Mapping[type, SingleArgCallable]
-) -> Optional[SingleArgCallable]:
+) -> SingleArgCallable | None:
     encoder = custom_encoders.get(type(obj))
     if encoder is not None:
         return encoder

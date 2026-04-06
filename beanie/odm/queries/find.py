@@ -1,29 +1,21 @@
+from collections.abc import Callable, Coroutine, Generator, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Coroutine,
-    Dict,
-    Generator,
     Generic,
-    List,
-    Mapping,
-    Optional,
-    Tuple,
-    Type,
     TypeVar,
     Union,
     cast,
     overload,
 )
 
-from motor.motor_asyncio import AsyncIOMotorClientSession
 from pydantic import BaseModel
 from pymongo import ReplaceOne
+from pymongo.asynchronous.client_session import AsyncClientSession
 from pymongo.results import UpdateResult
 
 from beanie.exceptions import DocumentNotFound
-from beanie.odm.bulk import BulkWriter, Operation
+from beanie.odm.bulk import BulkWriter
 from beanie.odm.cache import LRUCache
 from beanie.odm.enums import SortDirection
 from beanie.odm.interfaces.aggregation_methods import AggregateMethods
@@ -48,9 +40,12 @@ from beanie.odm.utils.encoder import Encoder
 from beanie.odm.utils.find import construct_lookup_queries, split_text_query
 from beanie.odm.utils.parsing import parse_obj
 from beanie.odm.utils.projection import get_projection
-from beanie.odm.utils.relations import convert_ids
+from beanie.odm.utils.relations import resolve_query_paths
 
 if TYPE_CHECKING:
+    from pymongo.asynchronous.command_cursor import AsyncCommandCursor
+    from pymongo.asynchronous.cursor import AsyncCursor
+
     from beanie.odm.documents import DocType
 
 FindQueryProjectionType = TypeVar("FindQueryProjectionType", bound=BaseModel)
@@ -64,38 +59,38 @@ class FindQuery(
     Find Query base class
     """
 
-    UpdateQueryType: Union[
-        Type[UpdateQuery], Type[UpdateMany], Type[UpdateOne]
-    ] = UpdateQuery
-    DeleteQueryType: Union[Type[DeleteOne], Type[DeleteMany]] = DeleteMany
+    UpdateQueryType: type[UpdateQuery] | type[UpdateMany] | type[UpdateOne] = (
+        UpdateQuery
+    )
+    DeleteQueryType: type[DeleteOne] | type[DeleteMany] = DeleteMany
     AggregationQueryType = AggregationQuery
 
-    def __init__(self, document_model: Type["DocType"]):
+    def __init__(self, document_model: type["DocType"]):
         self.document_model = document_model
-        self.find_expressions: List[Mapping[str, Any]] = []
-        self.projection_model: Type[FindQueryResultType] = cast(
-            Type[FindQueryResultType], self.document_model
+        self.find_expressions: list[Mapping[str, Any]] = []
+        self.projection_model: type[FindQueryResultType] = cast(
+            type[FindQueryResultType], self.document_model
         )
         self.session = None
-        self.encoders: Dict[Any, Callable[[Any], Any]] = {}
+        self.encoders: dict[Any, Callable[[Any], Any]] = {}
         self.ignore_cache: bool = False
         self.encoders = self.document_model.get_bson_encoders()
         self.fetch_links: bool = False
-        self.pymongo_kwargs: Dict[str, Any] = {}
+        self.pymongo_kwargs: dict[str, Any] = {}
         self.lazy_parse = False
-        self.nesting_depth: Optional[int] = None
-        self.nesting_depths_per_field: Optional[Dict[str, int]] = None
+        self.nesting_depth: int | None = None
+        self.nesting_depths_per_field: dict[str, int] | None = None
 
     def prepare_find_expressions(self):
         if self.document_model.get_link_fields() is not None:
             for i, query in enumerate(self.find_expressions):
-                self.find_expressions[i] = convert_ids(
+                self.find_expressions[i] = resolve_query_paths(
                     query,
                     doc=self.document_model,  # type: ignore
                     fetch_links=self.fetch_links,
                 )
 
-    def get_filter_query(self) -> Mapping[str, Any]:
+    def get_filter_query(self) -> dict[str, Any]:
         """
 
         Returns: MongoDB filter query
@@ -111,14 +106,14 @@ class FindQuery(
 
     def delete(
         self,
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
         **pymongo_kwargs: Any,
-    ) -> Union[DeleteOne, DeleteMany]:
+    ) -> DeleteOne | DeleteMany:
         """
         Provide search criteria to the Delete query
 
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :return: Union[DeleteOne, DeleteMany]
         """
         self.set_session(session=session)
@@ -132,14 +127,14 @@ class FindQuery(
     def project(self, projection_model):
         """
         Apply projection parameter
-        :param projection_model: Optional[Type[BaseModel]] - projection model
+        :param projection_model: Optional[type[BaseModel]] - projection model
         :return: self
         """
         if projection_model is not None:
             self.projection_model = projection_model
         return self
 
-    def get_projection_model(self) -> Type[FindQueryResultType]:
+    def get_projection_model(self) -> type[FindQueryResultType]:
         return self.projection_model
 
     async def count(self) -> int:
@@ -153,8 +148,9 @@ class FindQuery(
                 kwargs["limit"] = self.limit_number
             if self.skip_number:
                 kwargs["skip"] = self.skip_number
+        kwargs.update(self.pymongo_kwargs)
         return (
-            await self.document_model.get_motor_collection().count_documents(
+            await self.document_model.get_pymongo_collection().count_documents(
                 self.get_filter_query(), session=self.session, **kwargs
             )
         )
@@ -165,7 +161,14 @@ class FindQuery(
 
         :return: bool
         """
-        return await self.count() > 0
+        cursor = self.document_model.get_pymongo_collection().find(
+            filter=self.get_filter_query(),
+            projection={"_id": 1},
+            limit=1,
+            session=self.session,
+            **self.pymongo_kwargs,
+        )
+        return await anext(cursor, None) is not None
 
 
 class FindMany(
@@ -180,59 +183,59 @@ class FindMany(
     UpdateQueryType = UpdateMany
     DeleteQueryType = DeleteMany
 
-    def __init__(self, document_model: Type["DocType"]):
-        super(FindMany, self).__init__(document_model=document_model)
-        self.sort_expressions: List[Tuple[str, SortDirection]] = []
+    def __init__(self, document_model: type["DocType"]):
+        super().__init__(document_model=document_model)
+        self.sort_expressions: list[tuple[str, SortDirection]] = []
         self.skip_number: int = 0
         self.limit_number: int = 0
 
     @overload
     def find_many(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
+        *args: Mapping[Any, Any] | bool,
         projection_model: None = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindMany[FindQueryResultType]": ...
 
     @overload
     def find_many(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindMany[FindQueryProjectionType]": ...
 
     def find_many(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> Union[
         "FindMany[FindQueryResultType]", "FindMany[FindQueryProjectionType]"
@@ -240,14 +243,14 @@ class FindMany(
         """
         Find many documents by criteria
 
-        :param args: *Mapping[str, Any] - search criteria
+        :param args: *Mapping[Any, Any] - search criteria
         :param skip: Optional[int] - The number of documents to omit.
         :param limit: Optional[int] - The maximum number of results to return.
-        :param sort: Union[None, str, List[Tuple[str, SortDirection]]] - A key
+        :param sort: Union[None, str, list[tuple[str, SortDirection]]] - A key
         or a list of (key, direction) pairs specifying the sort order
         for this query.
-        :param projection_model: Optional[Type[BaseModel]] - projection model
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
+        :param projection_model: Optional[type[BaseModel]] - projection model
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param ignore_cache: bool
         :param **pymongo_kwargs: pymongo native parameters for find operation (if Document class contains links, this parameter must fit the respective parameter of the aggregate MongoDB function)
         :return: FindMany - query instance
@@ -279,19 +282,19 @@ class FindMany(
     @overload
     def project(
         self: "FindMany",
-        projection_model: Type[FindQueryProjectionType],
+        projection_model: type[FindQueryProjectionType],
     ) -> "FindMany[FindQueryProjectionType]": ...
 
     def project(
         self: "FindMany",
-        projection_model: Optional[Type[FindQueryProjectionType]],
+        projection_model: type[FindQueryProjectionType] | None,
     ) -> Union[
         "FindMany[FindQueryResultType]", "FindMany[FindQueryProjectionType]"
     ]:
         """
         Apply projection parameter
 
-        :param projection_model: Optional[Type[BaseModel]] - projection model
+        :param projection_model: Optional[type[BaseModel]] - projection model
         :return: self
         """
         super().project(projection_model)
@@ -300,50 +303,50 @@ class FindMany(
     @overload
     def find(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
+        *args: Mapping[Any, Any] | bool,
         projection_model: None = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindMany[FindQueryResultType]": ...
 
     @overload
     def find(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindMany[FindQueryProjectionType]": ...
 
     def find(
         self: "FindMany[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Union[None, str, List[Tuple[str, SortDirection]]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
+        sort: None | str | list[tuple[str, SortDirection]] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
         lazy_parse: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> Union[
         "FindMany[FindQueryResultType]", "FindMany[FindQueryProjectionType]"
@@ -359,7 +362,7 @@ class FindMany(
             projection_model=projection_model,
             session=session,
             ignore_cache=ignore_cache,
-            fetch_links=fetch_links,
+            fetch_links=fetch_links or self.fetch_links,
             lazy_parse=lazy_parse,
             nesting_depth=nesting_depth,
             nesting_depths_per_field=nesting_depths_per_field,
@@ -368,16 +371,17 @@ class FindMany(
 
     def sort(
         self,
-        *args: Optional[
-            Union[
-                str, Tuple[str, SortDirection], List[Tuple[str, SortDirection]]
-            ]
-        ],
+        *args: (
+            str
+            | tuple[str, SortDirection]
+            | list[tuple[str, SortDirection]]
+            | None
+        ),
     ) -> "FindMany[FindQueryResultType]":
         """
         Add sort parameters
         :param args: Union[str, Tuple[str, SortDirection],
-        List[Tuple[str, SortDirection]]] - A key or a tuple (key, direction)
+        list[tuple[str, SortDirection]]] - A key or a tuple (key, direction)
         or a list of (key, direction) pairs specifying
         the sort order for this query.
         :return: self
@@ -406,7 +410,7 @@ class FindMany(
                 raise TypeError("Wrong argument type")
         return self
 
-    def skip(self, n: Optional[int]) -> "FindMany[FindQueryResultType]":
+    def skip(self, n: int | None) -> "FindMany[FindQueryResultType]":
         """
         Set skip parameter
         :param n: int
@@ -416,7 +420,7 @@ class FindMany(
             self.skip_number = n
         return self
 
-    def limit(self, n: Optional[int]) -> "FindMany[FindQueryResultType]":
+    def limit(self, n: int | None) -> "FindMany[FindQueryResultType]":
         """
         Set limit parameter
         :param n: int
@@ -429,8 +433,8 @@ class FindMany(
     def update(
         self,
         *args: Mapping[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
         **pymongo_kwargs: Any,
     ):
         """
@@ -438,7 +442,7 @@ class FindMany(
         and provide search criteria there
 
         :param args: *Mapping[str,Any] - the modifications to apply.
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param bulk_writer: Optional[BulkWriter]
         :return: UpdateMany query
         """
@@ -456,7 +460,7 @@ class FindMany(
         self,
         *args: Mapping[str, Any],
         on_insert: "DocType",
-        session: Optional[AsyncIOMotorClientSession] = None,
+        session: AsyncClientSession | None = None,
         **pymongo_kwargs: Any,
     ):
         """
@@ -466,7 +470,7 @@ class FindMany(
         :param args: *Mapping[str,Any] - the modifications to apply.
         :param on_insert: DocType - document to insert if there is no matched
         document in the collection
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :return: UpdateMany query
         """
         self.set_session(session)
@@ -486,8 +490,8 @@ class FindMany(
     def update_many(
         self,
         *args: Mapping[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
         **pymongo_kwargs: Any,
     ) -> UpdateMany:
         """
@@ -495,7 +499,7 @@ class FindMany(
         [UpdateMany](query.md#updatemany) query
 
         :param args: *Mapping[str,Any] - the modifications to apply.
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :return: [UpdateMany](query.md#updatemany) query
         """
         return cast(
@@ -510,14 +514,14 @@ class FindMany(
 
     def delete_many(
         self,
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
         **pymongo_kwargs: Any,
     ) -> DeleteMany:
         """
         Provide search criteria to the [DeleteMany](query.md#deletemany) query
 
-        :param session:
+        :param session: Optional[AsyncClientSession] - pymongo session
         :return: [DeleteMany](query.md#deletemany) query
         """
         # We need to cast here to tell mypy that we are sure about the type.
@@ -533,41 +537,41 @@ class FindMany(
     @overload
     def aggregate(
         self,
-        aggregation_pipeline: List[Any],
+        aggregation_pipeline: list[Any],
         projection_model: None = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         **pymongo_kwargs: Any,
-    ) -> AggregationQuery[Dict[str, Any]]: ...
+    ) -> AggregationQuery[dict[str, Any]]: ...
 
     @overload
     def aggregate(
         self,
-        aggregation_pipeline: List[Any],
-        projection_model: Type[FindQueryProjectionType],
-        session: Optional[AsyncIOMotorClientSession] = None,
+        aggregation_pipeline: list[Any],
+        projection_model: type[FindQueryProjectionType],
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         **pymongo_kwargs: Any,
     ) -> AggregationQuery[FindQueryProjectionType]: ...
 
     def aggregate(
         self,
-        aggregation_pipeline: List[Any],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        aggregation_pipeline: list[dict[str, Any]],
+        projection_model: type[FindQueryProjectionType] | None = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         **pymongo_kwargs: Any,
-    ) -> Union[
-        AggregationQuery[Dict[str, Any]],
-        AggregationQuery[FindQueryProjectionType],
-    ]:
+    ) -> (
+        AggregationQuery[dict[str, Any]]
+        | AggregationQuery[FindQueryProjectionType]
+    ):
         """
         Provide search criteria to the [AggregationQuery](query.md#aggregationquery)
 
         :param aggregation_pipeline: list - aggregation pipeline. MongoDB doc:
         <https://docs.mongodb.com/manual/core/aggregation-pipeline/>
-        :param projection_model: Type[BaseModel] - Projection Model
-        :param session: Optional[AsyncIOMotorClientSession] - PyMongo session
+        :param projection_model: type[BaseModel] - Projection Model
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param ignore_cache: bool
         :return:[AggregationQuery](query.md#aggregationquery)
         """
@@ -610,14 +614,14 @@ class FindMany(
         ):
             return self.document_model._cache.set(self._cache_key, data)  # type: ignore
 
-    def build_aggregation_pipeline(self, *extra_stages):
+    def build_aggregation_pipeline(
+        self, *extra_stages: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         if self.fetch_links:
-            aggregation_pipeline: List[Dict[str, Any]] = (
-                construct_lookup_queries(
-                    self.document_model,
-                    nesting_depth=self.nesting_depth,
-                    nesting_depths_per_field=self.nesting_depths_per_field,
-                )
+            aggregation_pipeline = construct_lookup_queries(
+                self.document_model,
+                nesting_depth=self.nesting_depth,
+                nesting_depths_per_field=self.nesting_depths_per_field,
             )
         else:
             aggregation_pipeline = []
@@ -660,25 +664,25 @@ class FindMany(
             aggregation_pipeline.append({"$limit": self.limit_number})
         return aggregation_pipeline
 
-    @property
-    def motor_cursor(self):
+    async def get_cursor(
+        self,
+    ) -> "AsyncCommandCursor[dict[str, Any]] | AsyncCursor[dict[str, Any]] | None":
         if self.fetch_links:
-            aggregation_pipeline: List[Dict[str, Any]] = (
-                self.build_aggregation_pipeline()
-            )
-
+            aggregation_pipeline = self.build_aggregation_pipeline()
             projection = get_projection(self.projection_model)
 
             if projection is not None:
                 aggregation_pipeline.append({"$project": projection})
 
-            return self.document_model.get_motor_collection().aggregate(
-                aggregation_pipeline,
-                session=self.session,
-                **self.pymongo_kwargs,
+            return (
+                await self.document_model.get_pymongo_collection().aggregate(
+                    aggregation_pipeline,
+                    session=self.session,
+                    **self.pymongo_kwargs,
+                )
             )
 
-        return self.document_model.get_motor_collection().find(
+        return self.document_model.get_pymongo_collection().find(
             filter=self.get_filter_query(),
             sort=self.sort_expressions,
             projection=get_projection(self.projection_model),
@@ -688,14 +692,16 @@ class FindMany(
             **self.pymongo_kwargs,
         )
 
-    async def first_or_none(self) -> Optional[FindQueryResultType]:
+    async def first_or_none(self) -> FindQueryResultType | None:
         """
         Returns the first found element or None if no elements were found
         """
-        res = await self.limit(1).to_list()
-        if not res:
-            return None
-        return res[0]
+        existing_limit = self.limit_number
+        try:
+            result = await self.limit(1).to_list()
+            return result[0] if result else None
+        finally:
+            self.limit_number = existing_limit
 
     async def count(self) -> int:
         """
@@ -703,25 +709,81 @@ class FindMany(
         :return: int
         """
         if self.fetch_links:
-            aggregation_pipeline: List[Dict[str, Any]] = (
-                self.build_aggregation_pipeline()
-            )
-
+            aggregation_pipeline = self.build_aggregation_pipeline()
             aggregation_pipeline.append({"$count": "count"})
-
-            result = (
-                await self.document_model.get_motor_collection()
-                .aggregate(
+            cursor = (
+                await self.document_model.get_pymongo_collection().aggregate(
                     aggregation_pipeline,
                     session=self.session,
                     **self.pymongo_kwargs,
                 )
-                .to_list(length=1)
             )
+            result = await cursor.to_list(length=1)
 
             return result[0]["count"] if result else 0
 
-        return await super(FindMany, self).count()
+        return await super().count()
+
+    async def distinct(
+        self,
+        key: Any,
+        session: AsyncClientSession | None = None,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """
+        Get a list of distinct values for `key` among documents matching
+        the query filter.  When ``fetch_links`` is enabled the query is
+        executed via an aggregation pipeline so that ``$lookup`` stages
+        are included.
+
+        Sort, skip and limit stages are excluded from the pipeline
+        because MongoDB's distinct command does not support pagination
+        and distinct values are order-independent.
+
+        :param key: Field name for which to return distinct values.
+        :param session: Optional pymongo session. Defaults to None.
+        :return: List of distinct values.
+        """
+        if self.fetch_links:
+            aggregation_pipeline = [
+                *(
+                    stage
+                    for stage in self.build_aggregation_pipeline()
+                    if "$sort" not in stage
+                    and "$skip" not in stage
+                    and "$limit" not in stage
+                ),
+                {
+                    "$unwind": {
+                        "path": f"${key}",
+                        "preserveNullAndEmptyArrays": True,
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "distinct": {"$addToSet": f"${key}"},
+                    }
+                },
+            ]
+            kwargs = {**self.pymongo_kwargs, **kwargs}
+            cursor = (
+                await self.document_model.get_pymongo_collection().aggregate(
+                    aggregation_pipeline,
+                    session=session or self.session,
+                    **kwargs,
+                )
+            )
+            result = await cursor.to_list(length=1)
+            return result[0]["distinct"] if result else []
+
+        kwargs = {**self.pymongo_kwargs, **kwargs}
+        return await self.document_model.get_pymongo_collection().distinct(
+            key=key,
+            filter=self.get_filter_query(),
+            session=session or self.session,
+            **kwargs,
+        )
 
 
 class FindOne(FindQuery[FindQueryResultType]):
@@ -741,7 +803,7 @@ class FindOne(FindQuery[FindQueryResultType]):
     @overload
     def project(
         self: "FindOne[FindQueryResultType]",
-        projection_model: Type[FindQueryProjectionType],
+        projection_model: type[FindQueryProjectionType],
     ) -> "FindOne[FindQueryProjectionType]": ...
 
     # TODO probably merge FindOne and FindMany to one class to avoid this
@@ -749,13 +811,13 @@ class FindOne(FindQuery[FindQueryResultType]):
 
     def project(
         self: "FindOne[FindQueryResultType]",
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
+        projection_model: type[FindQueryProjectionType] | None = None,
     ) -> Union[
         "FindOne[FindQueryResultType]", "FindOne[FindQueryProjectionType]"
     ]:
         """
         Apply projection parameter
-        :param projection_model: Optional[Type[BaseModel]] - projection model
+        :param projection_model: Optional[type[BaseModel]] - projection model
         :return: self
         """
         super().project(projection_model)
@@ -764,38 +826,38 @@ class FindOne(FindQuery[FindQueryResultType]):
     @overload
     def find_one(
         self: "FindOne[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
+        *args: Mapping[Any, Any] | bool,
         projection_model: None = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindOne[FindQueryResultType]": ...
 
     @overload
     def find_one(
         self: "FindOne[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Type[FindQueryProjectionType],
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType],
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> "FindOne[FindQueryProjectionType]": ...
 
     def find_one(
         self: "FindOne[FindQueryResultType]",
-        *args: Union[Mapping[str, Any], bool],
-        projection_model: Optional[Type[FindQueryProjectionType]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        *args: Mapping[Any, Any] | bool,
+        projection_model: type[FindQueryProjectionType] | None = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
         fetch_links: bool = False,
-        nesting_depth: Optional[int] = None,
-        nesting_depths_per_field: Optional[Dict[str, int]] = None,
+        nesting_depth: int | None = None,
+        nesting_depths_per_field: dict[str, int] | None = None,
         **pymongo_kwargs: Any,
     ) -> Union[
         "FindOne[FindQueryResultType]", "FindOne[FindQueryProjectionType]"
@@ -803,9 +865,9 @@ class FindOne(FindQuery[FindQueryResultType]):
         """
         Find one document by criteria
 
-        :param args: *Mapping[str, Any] - search criteria
-        :param projection_model: Optional[Type[BaseModel]] - projection model
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
+        :param args: *Mapping[Any, Any] - search criteria
+        :param projection_model: Optional[type[BaseModel]] - projection model
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param ignore_cache: bool
         :param **pymongo_kwargs: pymongo native parameters for find operation (if Document class contains links, this parameter must fit the respective parameter of the aggregate MongoDB function)
         :return: FindOne - query instance
@@ -814,7 +876,7 @@ class FindOne(FindQuery[FindQueryResultType]):
         self.project(projection_model)
         self.set_session(session=session)
         self.ignore_cache = ignore_cache
-        self.fetch_links = fetch_links
+        self.fetch_links = fetch_links or self.fetch_links
         self.pymongo_kwargs.update(pymongo_kwargs)
         self.nesting_depth = nesting_depth
         self.nesting_depths_per_field = nesting_depths_per_field
@@ -823,9 +885,9 @@ class FindOne(FindQuery[FindQueryResultType]):
     def update(
         self,
         *args: Mapping[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
-        response_type: Optional[UpdateResponse] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
+        response_type: UpdateResponse | None = None,
         **pymongo_kwargs: Any,
     ):
         """
@@ -833,7 +895,7 @@ class FindOne(FindQuery[FindQueryResultType]):
         and provide search criteria there
 
         :param args: *Mapping[str,Any] - the modifications to apply.
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param bulk_writer: Optional[BulkWriter]
         :param response_type: Optional[UpdateResponse]
         :return: UpdateMany query
@@ -857,8 +919,8 @@ class FindOne(FindQuery[FindQueryResultType]):
         self,
         *args: Mapping[str, Any],
         on_insert: "DocType",
-        session: Optional[AsyncIOMotorClientSession] = None,
-        response_type: Optional[UpdateResponse] = None,
+        session: AsyncClientSession | None = None,
+        response_type: UpdateResponse | None = None,
         **pymongo_kwargs: Any,
     ):
         """
@@ -868,7 +930,7 @@ class FindOne(FindQuery[FindQueryResultType]):
         :param args: *Mapping[str,Any] - the modifications to apply.
         :param on_insert: DocType - document to insert if there is no matched
         document in the collection
-        :param session: Optional[AsyncIOMotorClientSession]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param response_type: Optional[UpdateResponse]
         :return: UpdateMany query
         """
@@ -890,16 +952,16 @@ class FindOne(FindQuery[FindQueryResultType]):
     def update_one(
         self,
         *args: Mapping[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
-        response_type: Optional[UpdateResponse] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
+        response_type: UpdateResponse | None = None,
         **pymongo_kwargs: Any,
     ) -> UpdateOne:
         """
         Create [UpdateOne](query.md#updateone) query using modifications and
         provide search criteria there
         :param args: *Mapping[str,Any] - the modifications to apply
-        :param session: Optional[AsyncIOMotorClientSession] - PyMongo sessions
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param response_type: Optional[UpdateResponse]
         :return: [UpdateOne](query.md#updateone) query
         """
@@ -916,13 +978,13 @@ class FindOne(FindQuery[FindQueryResultType]):
 
     def delete_one(
         self,
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
         **pymongo_kwargs: Any,
     ) -> DeleteOne:
         """
         Provide search criteria to the [DeleteOne](query.md#deleteone) query
-        :param session: Optional[AsyncIOMotorClientSession] - PyMongo sessions
+        :param session: Optional[AsyncClientSession] - pymongo session
         :return: [DeleteOne](query.md#deleteone) query
         """
         # We need to cast here to tell mypy that we are sure about the type.
@@ -938,20 +1000,20 @@ class FindOne(FindQuery[FindQueryResultType]):
     async def replace_one(
         self,
         document: "DocType",
-        session: Optional[AsyncIOMotorClientSession] = None,
-        bulk_writer: Optional[BulkWriter] = None,
-    ) -> Optional[UpdateResult]:
+        session: AsyncClientSession | None = None,
+        bulk_writer: BulkWriter | None = None,
+    ) -> UpdateResult | None:
         """
         Replace found document by provided
         :param document: Document - document, which will replace the found one
-        :param session: Optional[AsyncIOMotorClientSession] - PyMongo session
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param bulk_writer: Optional[BulkWriter] - Beanie bulk writer
         :return: UpdateResult
         """
         self.set_session(session=session)
         if bulk_writer is None:
             result: UpdateResult = (
-                await self.document_model.get_motor_collection().replace_one(
+                await self.document_model.get_pymongo_collection().replace_one(
                     self.get_filter_query(),
                     get_dict(
                         document,
@@ -968,18 +1030,17 @@ class FindOne(FindQuery[FindQueryResultType]):
             return result
         else:
             bulk_writer.add_operation(
-                Operation(
-                    operation=ReplaceOne,
-                    first_query=self.get_filter_query(),
-                    second_query=get_dict(
+                self.document_model,
+                ReplaceOne(
+                    self.get_filter_query(),
+                    get_dict(
                         document,
                         to_db=True,
                         exclude={"_id"},
                         keep_nulls=document.get_settings().keep_nulls,
                     ),
-                    object_class=self.document_model,
-                    pymongo_kwargs=self.pymongo_kwargs,
-                )
+                    **self.pymongo_kwargs,
+                ),
             )
             return None
 
@@ -994,7 +1055,7 @@ class FindOne(FindQuery[FindQueryResultType]):
                 nesting_depths_per_field=self.nesting_depths_per_field,
                 **self.pymongo_kwargs,
             ).first_or_none()
-        return await self.document_model.get_motor_collection().find_one(
+        return await self.document_model.get_pymongo_collection().find_one(
             filter=self.get_filter_query(),
             projection=get_projection(self.projection_model),
             session=self.session,
@@ -1003,7 +1064,7 @@ class FindOne(FindQuery[FindQueryResultType]):
 
     def __await__(
         self,
-    ) -> Generator[Coroutine, Any, Optional[FindQueryResultType]]:
+    ) -> Generator[Coroutine, Any, FindQueryResultType | None]:
         """
         Run the query
         :return: BaseModel
@@ -1020,7 +1081,7 @@ class FindOne(FindQuery[FindQueryResultType]):
                 self.session,
                 self.fetch_links,
             )
-            document: Dict[str, Any] = self.document_model._cache.get(  # type: ignore
+            document: dict[str, Any] = self.document_model._cache.get(  # type: ignore
                 cache_key
             )
             if document is None:
@@ -1048,4 +1109,4 @@ class FindOne(FindQuery[FindQueryResultType]):
                 fetch_links=self.fetch_links,
                 **self.pymongo_kwargs,
             ).count()
-        return await super(FindOne, self).count()
+        return await super().count()

@@ -1,7 +1,6 @@
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List
 
 import requests  # type: ignore
 
@@ -29,9 +28,9 @@ class ChangelogGenerator:
         self.current_version = current_version
         self.new_version = new_version
         self.commits = self.get_commits_after_tag(current_version)
-        self.prs = [self.get_pr_for_commit(commit) for commit in self.commits]
+        self.prs = self.get_prs_for_commits(self.commits)
 
-    def get_commits_after_tag(self, tag: str) -> List[str]:
+    def get_commits_after_tag(self, tag: str) -> list[str]:
         result = subprocess.run(
             ["git", "log", f"{tag}..HEAD", "--pretty=format:%H"],
             stdout=subprocess.PIPE,
@@ -52,6 +51,18 @@ class ChangelogGenerator:
             url=pr_data["html_url"],
         )
 
+    def get_prs_for_commits(self, commit_shas: list[str]) -> list[PullRequest]:
+        prs: list[PullRequest] = []
+        unique_prs: set[int] = set()
+        for commit_sha in commit_shas:
+            pr = self.get_pr_for_commit(commit_sha)
+            pr_id = pr.number
+            if pr_id not in unique_prs:
+                unique_prs.add(pr_id)
+                prs.append(pr)
+        prs.sort(key=lambda pr: pr.number, reverse=True)
+        return prs
+
     def generate_changelog(self) -> str:
         markdown = f"\n## [{self.new_version}] - {datetime.now().strftime('%Y-%m-%d')}\n"
         for pr in self.prs:
@@ -68,8 +79,8 @@ if __name__ == "__main__":
     generator = ChangelogGenerator(
         username="BeanieODM",
         repository="beanie",
-        current_version="1.28.0",
-        new_version="1.29.0",
+        current_version="2.0.0",
+        new_version="2.0.1",
     )
 
     changelog = generator.generate_changelog()

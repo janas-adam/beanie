@@ -2,6 +2,167 @@
 
 Beanie project
 
+## [2.1.0] - 2026-03-20
+### Drop EOL Python 3.9, MongoDB 4.4/5.0/6.0, Pydantic v1
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1287>
+### Speed up init by avoiding duplicate db commands
+- Author - [vvuk](https://github.com/vvuk)
+- PR <https://github.com/BeanieODM/beanie/pull/1276>
+### Improve class filter and is/is not for enum comparison
+- Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)
+- PR <https://github.com/BeanieODM/beanie/pull/1275>
+### Fix OperationFailure when saving with keep_nulls=False and no None values
+- Author - [veeceey](https://github.com/veeceey)
+- PR <https://github.com/BeanieODM/beanie/pull/1271>
+### Fix FindQuery.count() ignoring pymongo_kwargs
+- Author - [veeceey](https://github.com/veeceey)
+- PR <https://github.com/BeanieODM/beanie/pull/1269>
+### Add Beanie version to handshake metadata
+- Author - [NoahStapp](https://github.com/NoahStapp)
+- PR <https://github.com/BeanieODM/beanie/pull/1255>
+### Docs: clarify state management description
+- Author - [smahn9123](https://github.com/smahn9123)
+- PR <https://github.com/BeanieODM/beanie/pull/1248>
+### Add docstring to DocumentWithSoftDelete
+- Author - [gugu-py](https://github.com/gugu-py)
+- PR <https://github.com/BeanieODM/beanie/pull/1241>
+### Fix: support frozen fields on save() and replace()
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1282>
+### Fix: handle RootModel with custom __iter__ in save()
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1284>
+### Fix: handle BackLink types in fetch_link and fetch_all_links
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1286>
+### Fix: persist before_event changes to DB on save/update/replace
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1279>
+### Fix: resolve Pydantic field aliases in nested expression field queries
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1278>
+### Do not ignore deprecation warnings in tests
+- Author - [Viicos](https://github.com/Viicos)
+- PR <https://github.com/BeanieODM/beanie/pull/1123>
+
+[2.1.0]: https://pypi.org/project/beanie/2.1.0
+
+## [2.0.1] - 2025-11-17
+### Fix: exclude pymongo 4.15.0 due to a known issue
+- Author - [staticxterm](https://github.com/staticxterm)
+- PR <https://github.com/BeanieODM/beanie/pull/1225>
+### Bump lazy-model
+- Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)
+- PR <https://github.com/BeanieODM/beanie/pull/1218>
+### Fix: incomplete type hint for regex pattern
+- Author - [xcrong](https://github.com/xcrong)
+- PR <https://github.com/BeanieODM/beanie/pull/1209>
+### Fix return types of min and max methods
+- Author - [kewldan](https://github.com/kewldan)
+- PR <https://github.com/BeanieODM/beanie/pull/1204>
+### Handle aggregation method on the whole collection
+- Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)
+- PR <https://github.com/BeanieODM/beanie/pull/1203>
+### Fix: preserve fetch_links across chained find() and find_one()
+- Author - [scarlet2131](https://github.com/scarlet2131)
+- PR <https://github.com/BeanieODM/beanie/pull/1184>
+### Fix: pydantic "exclude" option is not working #756
+- Author - [CatBraaain](https://github.com/CatBraaain)
+- PR <https://github.com/BeanieODM/beanie/pull/1154>
+### Fix pydanticdeprecatedsince211: accessing the 'model_fields' attribute on the instance is deprecated
+- Author - [gsakkis](https://github.com/gsakkis)
+- PR <https://github.com/BeanieODM/beanie/pull/1150>
+
+[2.0.1]: https://pypi.org/project/beanie/2.0.1
+
+## [2.0.0] - 2025-07-09
+### Transform asyncdocmethod[doctype, p, r] into any to fix "incorrect call arguments" warning in pycharm
+- Author - [hRtWzFe](https://github.com/hRtWzFe)
+- PR <https://github.com/BeanieODM/beanie/pull/1166>
+### Fix typos in migrations docs
+- Author - [Rishat-F](https://github.com/Rishat-F)
+- PR <https://github.com/BeanieODM/beanie/pull/1136>
+### Motor -> async pymongo
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1113>
+
+[2.0.0]: https://pypi.org/project/beanie/2.0.0
+
+## [1.30.0] - 2025-06-10
+### Docs: update backlink usage of original_field for pydantic v2
+- Author - [scarlet2131](https://github.com/scarlet2131)
+- PR <https://github.com/BeanieODM/beanie/pull/1183>
+### Fix: first_or_none no longer mutates findmany object (#1116)
+- Author - [egorzh01](https://github.com/egorzh01)
+- PR <https://github.com/BeanieODM/beanie/pull/1178>
+### Migration finder skips modules starting with underscore
+- Author - [unexceptable](https://github.com/unexceptable)
+- PR <https://github.com/BeanieODM/beanie/pull/1177>
+### Docs: update incorrect event-based actions docs
+- Author - [kaperont](https://github.com/kaperont)
+- PR <https://github.com/BeanieODM/beanie/pull/1163>
+### Fix: deprecate bucket_rounding_second in favor of bucket_rounding_seconds in timeseriesconfig
+- Author - [m00rex](https://github.com/m00rex)
+- PR <https://github.com/BeanieODM/beanie/pull/1162>
+### Switch to precommit ci
+- Author - [07pepa](https://github.com/07pepa)
+- PR <https://github.com/BeanieODM/beanie/pull/1160>
+### Drop py3.8 support
+- Author - [roman-right](https://github.com/roman-right)
+- PR <https://github.com/BeanieODM/beanie/pull/1159>
+### Update toml dependency to use tomli instead of toml
+- Author - [Taaku18](https://github.com/Taaku18)
+- PR <https://github.com/BeanieODM/beanie/pull/1144>
+### Fix failing tests in ci
+- Author - [staticxterm](https://github.com/staticxterm)
+- PR <https://github.com/BeanieODM/beanie/pull/1141>
+### Fix find type hint for filter args
+- Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)
+- PR <https://github.com/BeanieODM/beanie/pull/1139>
+### Fixed attributeerror in merge_model when updating document
+- Author - [mattewid](https://github.com/mattewid)
+- PR <https://github.com/BeanieODM/beanie/pull/1126>
+### Fix bulkwriter.__init__ bug when it has object_class param input
+- Author - [hagd0520](https://github.com/hagd0520)
+- PR <https://github.com/BeanieODM/beanie/pull/1107>
+### Change schema generation for pydanticobjectid
+- Author - [dantetemplar](https://github.com/dantetemplar)
+- PR <https://github.com/BeanieODM/beanie/pull/1099>
+### Add deduplication of entries to changelog script
+- Author - [staticxterm](https://github.com/staticxterm)
+- PR <https://github.com/BeanieODM/beanie/pull/1081>
+
+[1.30.0]: https://pypi.org/project/beanie/1.30.0
+
+## [1.29.0] - 2025-01-06
+### Fix serialization of link/backlink and openapi schema generation
+- Author - [staticxterm](https://github.com/staticxterm)
+- PR <https://github.com/BeanieODM/beanie/pull/1080>
+### Fix: `owner` model missing in `init_beanie` in inheritance documentation's inserts example
+- Author - [ksayer](https://github.com/ksayer)
+- PR <https://github.com/BeanieODM/beanie/pull/1090>
+### Make `diacritic_sensitive` parameter optional to support $text operator on cosmos db
+- Author - [mykolaskrynnyk](https://github.com/mykolaskrynnyk)
+- PR <https://github.com/BeanieODM/beanie/pull/1089>
+### Add tests with case of {id} in fastapi path
+- Author - [dantetemplar](https://github.com/dantetemplar)
+- PR <https://github.com/BeanieODM/beanie/pull/1100>
+### Use strings to specify mongodb versions in ci
+- Author - [Viicos](https://github.com/Viicos)
+- PR <https://github.com/BeanieODM/beanie/pull/1094>
+### fix: pydantic 2.10.x breaking change
+- Author - [mdaffad](https://github.com/mdaffad)
+- PR <https://github.com/BeanieODM/beanie/pull/1095>
+### Bulk writer improving & bulk_writer method for document and possibility to bypass mongo document validation + comment parameter
+- Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)
+- PR <https://github.com/BeanieODM/beanie/pull/1079>
+### Add coverage configuration to pyproject.toml
+- Author - [staticxterm](https://github.com/staticxterm)
+- PR <https://github.com/BeanieODM/beanie/pull/1091>
+
+[1.29.0]: https://pypi.org/project/beanie/1.29.0
+
 ## [1.28.0] - 2024-12-05
 ### Fix kwargs/args untyped
 - Author - [CAPITAINMARVEL](https://github.com/CAPITAINMARVEL)

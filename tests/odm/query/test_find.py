@@ -5,15 +5,20 @@ import pytest
 from pydantic import BaseModel
 
 from beanie.odm.enums import SortDirection
+from beanie.odm.operators.find.comparison import In
 from tests.odm.models import (
     Color,
     DocumentWithBsonEncodersFiledsTypes,
+    DocumentWithList,
+    Door,
     House,
+    Lock,
     Sample,
+    Window,
 )
 
 
-async def test_find_query():
+def test_find_query():
     q = Sample.find_many(Sample.integer == 1).get_filter_query()
     assert q == {"integer": 1}
 
@@ -38,7 +43,7 @@ async def test_find_many(preset_documents):
         await Sample.find_many(Sample.integer > 1)
         .find_many(Sample.nested.optional == None)
         .to_list()
-    )  # noqa
+    )
     assert len(result) == 2
     for a in result:
         assert a.integer > 1
@@ -47,7 +52,7 @@ async def test_find_many(preset_documents):
     len_result = 0
     async for a in Sample.find_many(Sample.integer > 1).find_many(
         Sample.nested.optional == None
-    ):  # noqa
+    ):
         assert a in result
         len_result += 1
 
@@ -77,7 +82,7 @@ async def test_find_many_skip(preset_documents):
         Sample.find_many(Sample.increment > 2)
         .find_many(Sample.nested.optional == None)
         .skip(1)
-    ):  # noqa
+    ):
         assert sample in result
         len_result += 1
 
@@ -97,7 +102,7 @@ async def test_find_many_limit(preset_documents):
         .sort(Sample.increment)
         .limit(2)
         .to_list()
-    )  # noqa
+    )
     assert len(result) == 2
     for a in result:
         assert a.increment > 2
@@ -109,7 +114,7 @@ async def test_find_many_limit(preset_documents):
         .find(Sample.nested.optional == None)
         .sort(Sample.increment)
         .limit(2)
-    ):  # noqa
+    ):
         assert a in result
         len_result += 1
 
@@ -131,20 +136,20 @@ async def test_find_all(preset_documents):
 async def test_find_one(preset_documents):
     a = await Sample.find_one(Sample.integer > 1).find_one(
         Sample.nested.optional == None
-    )  # noqa
+    )
     assert a.integer > 1
     assert a.nested.optional is None
 
     a = await Sample.find_one(Sample.integer > 100).find_one(
         Sample.nested.optional == None
-    )  # noqa
+    )
     assert a is None
 
 
 async def test_get(preset_documents):
     a = await Sample.find_one(Sample.integer > 1).find_one(
         Sample.nested.optional == None
-    )  # noqa
+    )
     assert a.integer > 1
     assert a.nested.optional is None
 
@@ -302,7 +307,7 @@ async def test_find_many_with_session(preset_documents, session):
     len_result = 0
     async for a in Sample.find_many(Sample.integer > 1).find_many(
         Sample.nested.optional == None
-    ):  # noqa
+    ):
         assert a in result
         len_result += 1
 
@@ -336,12 +341,13 @@ async def test_find_by_datetime(preset_documents):
 
 
 async def test_find_first_or_none(preset_documents):
-    doc = (
-        await Sample.find(Sample.increment > 1)
-        .sort(-Sample.increment)
-        .first_or_none()
-    )
+    q = Sample.find(Sample.increment > 1).sort(-Sample.increment)
+    doc = await q.first_or_none()
+    assert doc is not None
     assert doc.increment == 9
+
+    docs = await q.to_list()
+    assert len(docs) == 8
 
     doc = (
         await Sample.find(Sample.increment > 9)
@@ -422,3 +428,130 @@ async def test_find_many_with_enum_in_query(preset_documents):
     }
     result = await Sample.find_many(filter_query).to_list()
     assert len(result) == 2
+
+
+# @pytest.mark.asyncio
+async def test_fetch_links_with_chained_delete():
+    lock = await Lock(k=123).insert()
+    window = await Window(x=1, y=2, lock=lock).insert()
+    door = await Door(t=10, window=window, locks=[lock]).insert()
+
+    await House(windows=[window], door=door, height=10, name="test").insert()
+    await House(windows=[window], door=door, height=12, name="test2").insert()
+
+    # Deletion with chained query and fetch_links
+    deleted_count = (
+        await House.find(House.height > 5, fetch_links=True)
+        .find(House.height < 20)
+        .delete()
+    )
+
+    assert deleted_count.deleted_count == 2
+
+    # Confirm deletion
+    remaining = await House.find_all().to_list()
+    assert len(remaining) == 0
+
+
+async def test_distinct(preset_documents):
+    # distinct without filter
+    values = await Sample.find().distinct("integer")
+    assert sorted(values) == [0, 1, 2, 3]
+
+    # distinct with filter
+    values = await Sample.find(Sample.integer > 1).distinct("integer")
+    assert sorted(values) == [2, 3]
+
+    # distinct on string field
+    values = await Sample.find(Sample.integer == 0).distinct("string")
+    assert values == ["test_0"]
+
+    # empty result
+    values = await Sample.find(Sample.integer == 999).distinct("string")
+    assert values == []
+
+    # skip/limit should be ignored by distinct (MongoDB does not support them)
+    values = await Sample.find().skip(5).limit(2).distinct("integer")
+    assert sorted(values) == [0, 1, 2, 3]
+
+
+async def test_distinct_with_beanie_operators(preset_documents):
+    # In operator
+    values = await Sample.find(In(Sample.integer, [0, 2])).distinct("integer")
+    assert sorted(values) == [0, 2]
+
+    # NE operator
+    values = await Sample.find(Sample.integer != 0).distinct("integer")
+    assert sorted(values) == [1, 2, 3]
+
+
+async def test_distinct_with_session(preset_documents, session):
+    values = await Sample.find(Sample.integer > 1).distinct(
+        "integer", session=session
+    )
+    assert sorted(values) == [2, 3]
+
+
+async def test_distinct_chained_find(preset_documents):
+    # Multiple find() chaining before distinct
+    values = (
+        await Sample.find(Sample.integer >= 1)
+        .find(Sample.integer <= 2)
+        .distinct("integer")
+    )
+    assert sorted(values) == [1, 2]
+
+
+async def test_distinct_nested_field(preset_documents):
+    values = await Sample.find(Sample.integer == 0).distinct("nested.integer")
+    assert sorted(values) == [0, 1]
+
+
+async def test_distinct_with_fetch_links():
+    lock1 = await Lock(k=1).insert()
+    lock2 = await Lock(k=2).insert()
+    window1 = await Window(x=1, y=1, lock=lock1).insert()
+    window2 = await Window(x=2, y=2, lock=lock2).insert()
+    door = await Door(t=10, window=window1, locks=[lock1, lock2]).insert()
+
+    await House(
+        windows=[window1], door=door, height=10, name="house_a"
+    ).insert()
+    await House(
+        windows=[window2], door=door, height=20, name="house_b"
+    ).insert()
+    await House(
+        windows=[window1, window2], door=door, height=10, name="house_c"
+    ).insert()
+
+    # distinct on own field with fetch_links
+    names = await House.find(House.height == 10, fetch_links=True).distinct(
+        "name"
+    )
+    assert sorted(names) == ["house_a", "house_c"]
+
+    # distinct on linked document field with fetch_links
+    heights = await House.find(House.door.t == 10, fetch_links=True).distinct(
+        "height"
+    )
+    assert sorted(heights) == [10, 20]
+
+    # skip/limit/sort should be ignored by distinct even with fetch_links
+    names = (
+        await House.find(fetch_links=True)
+        .sort("name")
+        .skip(1)
+        .limit(1)
+        .distinct("name")
+    )
+    assert sorted(names) == ["house_a", "house_b", "house_c"]
+
+
+async def test_distinct_array_field():
+    await DocumentWithList(list_values=["a", "b"]).insert()
+    await DocumentWithList(list_values=["b", "c"]).insert()
+    await DocumentWithList(list_values=["c", "d"]).insert()
+
+    # distinct on an array field should return individual elements, not arrays
+    values = await DocumentWithList.find().distinct("list_values")
+    assert sorted(values) == ["a", "b", "c", "d"]

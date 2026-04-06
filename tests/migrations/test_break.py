@@ -1,5 +1,6 @@
 import pytest
 from pydantic.main import BaseModel
+from pymongo.errors import BulkWriteError
 
 from beanie import Indexed, init_beanie
 from beanie.executors.migrate import MigrationSettings, run_migrate
@@ -29,7 +30,7 @@ class Note(Document):
         name = "notes"
 
 
-@pytest.fixture()
+@pytest.fixture
 async def notes(db):
     await init_beanie(database=db, document_models=[OldNote])
     await OldNote.delete_all()
@@ -38,8 +39,8 @@ async def notes(db):
         await note.insert()
     yield
     await OldNote.delete_all()
-    await OldNote.get_motor_collection().drop()
-    await OldNote.get_motor_collection().drop_indexes()
+    await OldNote.get_pymongo_collection().drop()
+    await OldNote.get_pymongo_collection().drop_indexes()
 
 
 @pytest.mark.skip("TODO: Fix this test")
@@ -49,13 +50,13 @@ async def test_migration_break(settings, notes, db):
         database_name=settings.mongodb_db_name,
         path="tests/migrations/migrations_for_test/break",
     )
-    with pytest.raises(Exception):
+    with pytest.raises(BulkWriteError):
         await run_migrate(migration_settings)
 
     await init_beanie(database=db, document_models=[OldNote])
     inspection = await OldNote.inspect_collection()
     assert inspection.status == InspectionStatuses.OK
-    notes = await OldNote.get_motor_collection().find().to_list(length=100)
+    notes = await OldNote.get_pymongo_collection().find().to_list(length=100)
     names = set(n["name"] for n in notes)
     assert names == {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
     for note in notes:

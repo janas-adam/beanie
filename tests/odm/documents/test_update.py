@@ -5,9 +5,9 @@ from beanie.exceptions import (
     ReplaceError,
 )
 from beanie.odm.fields import PydanticObjectId
-from beanie.odm.utils.pydantic import IS_PYDANTIC_V2
 from tests.odm.models import (
     DocumentTestModel,
+    DocumentTestModelWithModelConfigExtraAllow,
     DocumentWithKeepNullsFalse,
     DocumentWithList,
     ModelWithOptionalField,
@@ -59,12 +59,7 @@ async def test_replace_many_not_all_the_docs_found(documents):
 
 async def test_replace(document):
     update_data = {"test_str": "REPLACED_VALUE"}
-    if IS_PYDANTIC_V2:
-        new_doc = document.model_copy(update=update_data)
-    else:
-        new_doc = document.copy(update=update_data)
-        # pydantic v1 doesn't copy excluded fields
-        new_doc.test_list = document.test_list
+    new_doc = document.model_copy(update=update_data)
     # document.test_str = "REPLACED_VALUE"
     await new_doc.replace()
     new_document = await DocumentTestModel.get(document.id)
@@ -85,10 +80,7 @@ async def test_replace_not_found(document_not_inserted):
 # SAVE
 async def test_save(document):
     update_data = {"test_str": "REPLACED_VALUE"}
-    if IS_PYDANTIC_V2:
-        new_doc = document.model_copy(update=update_data)
-    else:
-        new_doc = document.copy(update=update_data)
+    new_doc = document.model_copy(update=update_data)
     # document.test_str = "REPLACED_VALUE"
     await new_doc.save()
     new_document = await DocumentTestModel.get(document.id)
@@ -97,10 +89,8 @@ async def test_save(document):
 
 async def test_save_not_saved(document_not_inserted):
     await document_not_inserted.save()
-    assert (
-        hasattr(document_not_inserted, "id")
-        and document_not_inserted.id is not None
-    )
+    assert hasattr(document_not_inserted, "id")
+    assert document_not_inserted.id is not None
     from_db = await DocumentTestModel.get(document_not_inserted.id)
     assert from_db == document_not_inserted
 
@@ -108,10 +98,8 @@ async def test_save_not_saved(document_not_inserted):
 async def test_save_not_found(document_not_inserted):
     document_not_inserted.id = PydanticObjectId()
     await document_not_inserted.save()
-    assert (
-        hasattr(document_not_inserted, "id")
-        and document_not_inserted.id is not None
-    )
+    assert hasattr(document_not_inserted, "id")
+    assert document_not_inserted.id is not None
     from_db = await DocumentTestModel.get(document_not_inserted.id)
     assert from_db == document_not_inserted
 
@@ -125,6 +113,14 @@ async def test_update_one(document):
     ).update({"$set": {"test_list.$.test_str": "foo_foo"}})
     new_document = await DocumentTestModel.get(document.id)
     assert new_document.test_list[0].test_str == "foo_foo"
+
+
+async def test_update_one_set_extra_field():
+    doc = DocumentTestModelWithModelConfigExtraAllow()
+    await doc.insert()
+
+    await doc.update({"$set": {"my_extra_field": 12345}})
+    assert doc.my_extra_field == 12345
 
 
 async def test_update_many(documents):
@@ -178,7 +174,7 @@ async def test_save_keep_nulls_false():
     assert from_db.m.s is None
 
     raw_data = (
-        await DocumentWithKeepNullsFalse.get_motor_collection().find_one(
+        await DocumentWithKeepNullsFalse.get_pymongo_collection().find_one(
             {"_id": doc.id}
         )
     )
@@ -201,7 +197,7 @@ async def test_save_changes_keep_nulls_false():
     assert from_db.m.s is None
 
     raw_data = (
-        await DocumentWithKeepNullsFalse.get_motor_collection().find_one(
+        await DocumentWithKeepNullsFalse.get_pymongo_collection().find_one(
             {"_id": doc.id}
         )
     )
@@ -293,10 +289,7 @@ async def test_save_changes_keep_nulls_false():
 async def test_update_list():
     test_record = DocumentWithList(list_values=["1", "2", "3"])
     test_record = await test_record.insert()
-    if IS_PYDANTIC_V2:
-        update_data = test_record.model_dump()
-    else:
-        update_data = test_record.dict()
+    update_data = test_record.model_dump()
     update_data["list_values"] = ["5", "6", "7"]
 
     updated_test_record = await test_record.update({"$set": update_data})

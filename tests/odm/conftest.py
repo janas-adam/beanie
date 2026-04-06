@@ -1,19 +1,23 @@
 import warnings
 from datetime import datetime, timedelta, timezone
 from random import randint
-from typing import List
 
 import pytest
 
+from beanie.odm.documents import Document
 from beanie.odm.utils.init import init_beanie
 from tests.odm.models import (
     ADocument,
     BDocument,
     Bicycle,
+    BicycleWithCustomClassId,
     Bike,
+    BikeWithCustomClassId,
     BsonRegexDoc,
     Bus,
+    BusWithCustomClassId,
     Car,
+    CarWithCustomClassId,
     Doc2NonRoot,
     DocNonRoot,
     DocumentForEncodingTest,
@@ -28,6 +32,7 @@ from tests.odm.models import (
     DocumentTestModelWithIndexFlags,
     DocumentTestModelWithIndexFlagsAliases,
     DocumentTestModelWithLink,
+    DocumentTestModelWithModelConfigExtraAllow,
     DocumentTestModelWithSimpleIndex,
     DocumentTestModelWithSoftDelete,
     DocumentToBeLinked,
@@ -35,6 +40,8 @@ from tests.odm.models import (
     DocumentUnion,
     DocumentWithActions,
     DocumentWithActions2,
+    DocumentWithActionWinsStrategy,
+    DocumentWithAliasedLink,
     DocumentWithBackLink,
     DocumentWithBackLinkForNesting,
     DocumentWithBsonBinaryField,
@@ -44,10 +51,14 @@ from tests.odm.models import (
     DocumentWithCustomIdInt,
     DocumentWithCustomIdUUID,
     DocumentWithCustomInit,
+    DocumentWithCustomIterRootModel,
     DocumentWithDecimalField,
+    DocumentWithDeepNestedAlias,
     DocumentWithDeprecatedHiddenField,
     DocumentWithEnumKeysDict,
+    DocumentWithExcludedField,
     DocumentWithExtras,
+    DocumentWithFrozenField,
     DocumentWithHttpUrlField,
     DocumentWithIndexedObjectId,
     DocumentWithIndexMerging1,
@@ -59,9 +70,12 @@ from tests.odm.models import (
     DocumentWithListBackLink,
     DocumentWithListLink,
     DocumentWithListOfLinks,
+    DocumentWithNestedAlias,
     DocumentWithOptionalBackLink,
     DocumentWithOptionalListBackLink,
     DocumentWithPydanticConfig,
+    DocumentWithRevisionAndKeepNullsFalse,
+    DocumentWithRevisionAndUniqueField,
     DocumentWithRevisionTurnedOn,
     DocumentWithRootModelAsAField,
     DocumentWithStringField,
@@ -72,6 +86,9 @@ from tests.odm.models import (
     DocumentWithTurnedOnSavePrevious,
     DocumentWithTurnedOnStateManagement,
     DocumentWithTurnedOnStateManagementWithCustomId,
+    DocumentWithUnderscoreAction,
+    DocumentWithUpdateFieldAction,
+    DocumentWithValidateOnSaveAction,
     DocumentWithValidationOnSave,
     DocWithCallWrapper,
     Door,
@@ -90,6 +107,7 @@ from tests.odm.models import (
     Option1,
     Option2,
     Owner,
+    OwnerLinksToCustomClassId,
     PackageElemMatch,
     Region,
     Roof,
@@ -102,6 +120,7 @@ from tests.odm.models import (
     SubDocument,
     UsersAddresses,
     Vehicle,
+    VehicleWithCustomClassId,
     Window,
     WindowWithRevision,
     WindowWithValidationOnSave,
@@ -117,6 +136,7 @@ TESTING_MODELS = [
     DocumentTestModelWithSoftDelete,
     DocumentTestModelWithLink,
     DocumentTestModelWithCustomCollectionName,
+    DocumentTestModelWithModelConfigExtraAllow,
     DocumentTestModelWithSimpleIndex,
     DocumentTestModelWithIndexFlags,
     DocumentTestModelWithIndexFlagsAliases,
@@ -135,6 +155,7 @@ TESTING_MODELS = [
     DocumentWithTurnedOffStateManagement,
     DocumentWithValidationOnSave,
     DocumentWithRevisionTurnedOn,
+    DocumentWithRevisionAndUniqueField,
     DocumentWithHttpUrlField,
     House,
     Window,
@@ -144,6 +165,10 @@ TESTING_MODELS = [
     Yard,
     Lock,
     InheritedDocumentWithActions,
+    DocumentWithUpdateFieldAction,
+    DocumentWithUnderscoreAction,
+    DocumentWithValidateOnSaveAction,
+    DocumentWithActionWinsStrategy,
     DocumentForEncodingTest,
     DocumentForEncodingTestDate,
     DocumentWithStringField,
@@ -163,6 +188,12 @@ TESTING_MODELS = [
     Car,
     Bus,
     Owner,
+    VehicleWithCustomClassId,
+    BicycleWithCustomClassId,
+    BikeWithCustomClassId,
+    CarWithCustomClassId,
+    BusWithCustomClassId,
+    OwnerLinksToCustomClassId,
     SampleWithMutableObjects,
     DocNonRoot,
     Doc2NonRoot,
@@ -179,6 +210,7 @@ TESTING_MODELS = [
     DocumentWithTurnedOnStateManagementWithCustomId,
     DocumentWithDecimalField,
     DocumentWithKeepNullsFalse,
+    DocumentWithRevisionAndKeepNullsFalse,
     PackageElemMatch,
     DocumentWithLink,
     DocumentWithBackLink,
@@ -207,7 +239,14 @@ TESTING_MODELS = [
     LongSelfLink,
     BsonRegexDoc,
     NativeRegexDoc,
+    DocumentWithExcludedField,
+    DocumentWithFrozenField,
+    DocumentWithNestedAlias,
+    DocumentWithDeepNestedAlias,
+    DocumentWithAliasedLink,
 ]
+
+TESTING_MODELS.append(DocumentWithCustomIterRootModel)
 
 
 @pytest.fixture
@@ -263,7 +302,7 @@ async def preset_documents(point):
     await Sample.insert_many(documents=docs)
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_doc_not_saved(point):
     nested = Nested(
         integer=0,
@@ -290,45 +329,77 @@ def sample_doc_not_saved(point):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 async def session(cli):
-    s = await cli.start_session()
-    yield s
-    await s.end_session()
+    async with cli.start_session() as s:
+        yield s
 
 
-@pytest.fixture()
-async def deprecated_init_beanie(db):
-    for model in TESTING_MODELS:  # crude clear from init
-        await model.get_motor_collection().drop()
-        await model.get_motor_collection().drop_indexes()
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+@pytest.fixture
+def suppress_user_warning(recwarn):
+    warnings.simplefilter("ignore", UserWarning)
+    return
 
-        await init_beanie(
-            database=db,
-            document_models=[DocumentWithDeprecatedHiddenField],
-        )
-        assert len(w) == 1
-        assert issubclass(w[-1].category, DeprecationWarning)
-        assert (
-            "DocumentWithDeprecatedHiddenField: 'hidden=True' is deprecated, please use 'exclude=True'"
-            in str(w[-1].message)
-        )
+
+@pytest.fixture
+def recwarn_always(recwarn):
+    warnings.simplefilter("always")
+    return recwarn
+
+
+@pytest.fixture
+async def deprecated_init_beanie(db, recwarn_always):
+    await init_beanie(
+        database=db,
+        document_models=[DocumentWithDeprecatedHiddenField],
+    )
+
+    assert len(recwarn_always) == 1
+    assert issubclass(recwarn_always[0].category, DeprecationWarning)
+    assert (
+        "DocumentWithDeprecatedHiddenField: 'hidden=True' is deprecated, please use 'exclude=True'"
+        in str(recwarn_always[0].message)
+    )
+
+    return
 
 
 @pytest.fixture(autouse=True)
+async def clean_db():
+    async def _cleanup() -> None:
+        seen = set()
+        for model in TESTING_MODELS:
+            if not issubclass(model, Document):
+                continue
+
+            collection = model.get_pymongo_collection()
+            key = (collection.database.name, collection.name)
+
+            # Avoid cleaning the same shared collection multiple times
+            if key in seen:
+                continue
+            seen.add(key)
+
+            await collection.delete_many({})
+
+            # Reset model cache
+            cache = getattr(model, "_cache", None)
+            if cache is not None:
+                cache.cache.clear()
+
+    await _cleanup()
+    yield
+    await _cleanup()
+
+
+@pytest.fixture(scope="session", autouse=True)
 async def init(db):
     await init_beanie(
         database=db,
         document_models=TESTING_MODELS,
     )
-    try:
-        yield None
-    finally:
-        for model in TESTING_MODELS:
-            await model.get_motor_collection().drop()
-            await model.get_motor_collection().drop_indexes()
+
+    return
 
 
 @pytest.fixture
@@ -344,8 +415,8 @@ def document_not_inserted():
 @pytest.fixture
 def documents_not_inserted():
     def generate_documents(
-        number: int, test_str: str = None, random: bool = False
-    ) -> List[DocumentTestModel]:
+        number: int, test_str: str | None = None, random: bool = False
+    ) -> list[DocumentTestModel]:
         return [
             DocumentTestModel(
                 test_int=randint(0, 1000000) if random else i,
@@ -373,7 +444,7 @@ def document_soft_delete_not_inserted():
 @pytest.fixture
 def documents_soft_delete_not_inserted():
     docs = []
-    for i in range(3):
+    for _ in range(3):
         docs.append(
             DocumentTestModelWithSoftDelete(
                 test_int=randint(0, 1000000),
@@ -391,7 +462,7 @@ async def document(document_not_inserted) -> DocumentTestModel:
 @pytest.fixture
 def documents(documents_not_inserted):
     async def generate_documents(
-        number: int, test_str: str = None, random: bool = False
+        number: int, test_str: str | None = None, random: bool = False
     ):
         result = await DocumentTestModel.insert_many(
             documents_not_inserted(number, test_str, random)

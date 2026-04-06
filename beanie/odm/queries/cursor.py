@@ -1,14 +1,15 @@
 from abc import abstractmethod
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Dict,
     Generic,
-    List,
-    Optional,
-    Type,
     TypeVar,
     cast,
 )
+
+if TYPE_CHECKING:
+    from pymongo.asynchronous.command_cursor import AsyncCommandCursor
+    from pymongo.asynchronous.cursor import AsyncCursor
 
 from pydantic.main import BaseModel
 
@@ -19,7 +20,7 @@ CursorResultType = TypeVar("CursorResultType")
 
 class BaseCursorQuery(Generic[CursorResultType]):
     """
-    BaseCursorQuery class. Wrapper over AsyncIOMotorCursor,
+    BaseCursorQuery class. Wrapper over AsyncCursor,
     which parse result with model
     """
 
@@ -27,22 +28,21 @@ class BaseCursorQuery(Generic[CursorResultType]):
     lazy_parse = False
 
     @abstractmethod
-    def get_projection_model(self) -> Optional[Type[BaseModel]]: ...
+    def get_projection_model(self) -> type[BaseModel] | None: ...
 
-    @property
     @abstractmethod
-    def motor_cursor(self): ...
-
-    def _cursor_params(self): ...
+    async def get_cursor(
+        self,
+    ) -> "AsyncCommandCursor[dict[str, Any]] | AsyncCursor[dict[str, Any]] | None": ...
 
     def __aiter__(self):
-        if self.cursor is None:
-            self.cursor = self.motor_cursor
         return self
 
     async def __anext__(self) -> CursorResultType:
         if self.cursor is None:
-            raise RuntimeError("cursor was not set")
+            self.cursor = await self.get_cursor()
+
+        assert self.cursor is not None
         next_item = await self.cursor.__anext__()
         projection = self.get_projection_model()
         if projection is None:
@@ -50,35 +50,33 @@ class BaseCursorQuery(Generic[CursorResultType]):
         return parse_obj(projection, next_item, lazy_parse=self.lazy_parse)  # type: ignore
 
     @abstractmethod
-    def _get_cache(self) -> List[Dict[str, Any]]: ...
+    def _get_cache(self) -> list[dict[str, Any]]: ...
 
     @abstractmethod
     def _set_cache(self, data): ...
 
     async def to_list(
-        self, length: Optional[int] = None
-    ) -> List[CursorResultType]:  # noqa
+        self, length: int | None = None
+    ) -> list[CursorResultType]:
         """
         Get list of documents
 
         :param length: Optional[int] - length of the list
         :return: Union[List[BaseModel], List[Dict[str, Any]]]
         """
-        cursor = self.motor_cursor
-        if cursor is None:
-            raise RuntimeError("self.motor_cursor was not set")
-        motor_list: List[Dict[str, Any]] = self._get_cache()
+        cursor = await self.get_cursor()
+        pymongo_list: list[dict[str, Any]] = self._get_cache()
 
-        if motor_list is None:
-            motor_list = await cursor.to_list(length)
-            self._set_cache(motor_list)
+        if pymongo_list is None:
+            pymongo_list = await cursor.to_list(length)
+            self._set_cache(pymongo_list)
         projection = self.get_projection_model()
         if projection is not None:
             return cast(
-                List[CursorResultType],
+                list[CursorResultType],
                 [
                     parse_obj(projection, i, lazy_parse=self.lazy_parse)
-                    for i in motor_list
+                    for i in pymongo_list
                 ],
             )
-        return cast(List[CursorResultType], motor_list)
+        return cast(list[CursorResultType], pymongo_list)

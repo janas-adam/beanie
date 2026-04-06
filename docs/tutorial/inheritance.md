@@ -14,9 +14,11 @@ Depending on the business logic, parent `Document` can be like an "abstract" cla
 To set the root model you have to set `is_root = True` in the inner Settings class. All the inherited documents (on any level) will be stored in the same collection.
 
 ```py hl_lines="20 20"
-from typing import Optional, List
-from motor.motor_asyncio import AsyncIOMotorClient
+from typing import List, Optional
+
 from pydantic import BaseModel
+from pymongo import AsyncMongoClient
+
 from beanie import Document, Link, init_beanie
 
 
@@ -31,7 +33,7 @@ class Vehicle(Document):
     #                          Bus
     # shared attribute for all children
     color: str
-    
+
     class Settings:
         is_root = True
 
@@ -58,19 +60,48 @@ class Car(Vehicle, Fuelled):
 class Bus(Car, Fuelled):
     """Inheritance chain is Vehicle -> Car -> Bus, it is also stored in Vehicle collection"""
     seats: int
-    
-    
+
+
 class Owner(Document):
     vehicles: Optional[List[Link[Vehicle]]]
 ```
+
+### Custom class identifiers
+
+By default, Beanie uses the `_class_id` field to store the document type discriminator. You can override the discriminator field name using the `class_id` setting.
+
+The value of the document type discriminator field is derived automatically from the document class name and the inheritance hierarchy. You have the option to manually set this value using the `class_id_value` setting.
+
+See the example below:
+
+```py
+class Vehicle(Document):
+    color: str
+
+    class Settings:
+        is_root = True
+        class_id = "type"           # Custom discriminator field name (default: "_class_id")
+
+
+class Car(Vehicle):
+    class Settings:
+        class_id_value = "car"        # Custom discriminator value (default: "Vehicle.Car")
+
+
+class Bus(Vehicle):
+    # Uses default: class_id_value = "Vehicle.Bus"
+    ...
+```
+
+In this example, the `type` field will store the discriminator value for each document, and in the `Car` class, `"car"` will be used as the `type` field's value instead of an automatically calculated one.
 
 ### Inserts
 
 Inserts work the same way as usual
 
 ```python
-client = AsyncIOMotorClient()
-await init_beanie(client.test_db, document_models=[Vehicle, Bicycle, Bike, Car, Bus])
+client = AsyncMongoClient()
+await init_beanie(client.test_db, document_models=[Vehicle, Bicycle, Bike, Car, Bus, Owner])
 
 bike_1 = await Bike(color='black', fuel='gasoline').insert()
 
@@ -125,6 +156,14 @@ To get a single Document it is not necessary to know the type. You can query usi
 await Vehicle.get(bus_2.id, with_children=True)
 # returns Bus instance:
 # Bus(fuel='diesel', ..., color='yellow', body='minibus', seats=26)
+```
+
+### Delete
+
+To delete all Documents in an inheritance tree
+
+```python
+await Vehicle.delete_all(with_children=True)
 ```
 
 ### Relations

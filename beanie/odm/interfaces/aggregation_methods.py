@@ -1,7 +1,7 @@
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, cast
 
-from motor.motor_asyncio import AsyncIOMotorClientSession
+from pymongo.asynchronous.client_session import AsyncClientSession
 
 from beanie.odm.fields import ExpressionField
 
@@ -16,16 +16,16 @@ class AggregateMethods:
         self,
         aggregation_pipeline,
         projection_model=None,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
     ): ...
 
     async def sum(
         self,
-        field: Union[str, ExpressionField],
-        session: Optional[AsyncIOMotorClientSession] = None,
+        field: ExpressionField | float | int | str,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Sum of values of the given field
 
@@ -41,8 +41,8 @@ class AggregateMethods:
 
         ```
 
-        :param field: Union[str, ExpressionField]
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
+        :param field: Union[ExpressionField, float, int, str]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param ignore_cache: bool
         :return: float - sum. None if there are no items.
         """
@@ -52,8 +52,8 @@ class AggregateMethods:
         ]
 
         # As we did not supply a projection we can safely cast the type (hinting to mypy that we know the type)
-        result: List[Dict[str, Any]] = cast(
-            List[Dict[str, Any]],
+        result: list[dict[str, Any]] = cast(
+            list[dict[str, Any]],
             await self.aggregate(
                 aggregation_pipeline=pipeline,
                 session=session,
@@ -66,10 +66,10 @@ class AggregateMethods:
 
     async def avg(
         self,
-        field,
-        session: Optional[AsyncIOMotorClientSession] = None,
+        field: ExpressionField | float | int | str,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Average of values of the given field
 
@@ -84,8 +84,8 @@ class AggregateMethods:
         avg_count = await Document.find(Sample.price <= 100).avg(Sample.count)
         ```
 
-        :param field: Union[str, ExpressionField]
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
+        :param field: Union[ExpressionField, float, int, str]
+        :param session: Optional[AsyncClientSession] - pymongo session
         :param ignore_cache: bool
         :return: Optional[float] - avg. None if there are no items.
         """
@@ -94,8 +94,8 @@ class AggregateMethods:
             {"$project": {"_id": 0, "avg": 1}},
         ]
 
-        result: List[Dict[str, Any]] = cast(
-            List[Dict[str, Any]],
+        result: list[dict[str, Any]] = cast(
+            list[dict[str, Any]],
             await self.aggregate(
                 aggregation_pipeline=pipeline,
                 session=session,
@@ -108,10 +108,10 @@ class AggregateMethods:
 
     async def max(
         self,
-        field: Union[str, ExpressionField],
-        session: Optional[AsyncIOMotorClientSession] = None,
+        field: ExpressionField | str | Any,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
-    ) -> Optional[float]:
+    ) -> Any | None:
         """
         Max of the values of the given field
 
@@ -126,17 +126,17 @@ class AggregateMethods:
         max_count = await Document.find(Sample.price <= 100).max(Sample.count)
         ```
 
-        :param field: Union[str, ExpressionField]
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
-        :return: float - max. None if there are no items.
+        :param field: Union[ExpressionField, str, Any]
+        :param session: Optional[AsyncClientSession] - pymongo session
+        :return: Any - max value. None if there are no items.
         """
         pipeline = [
             {"$group": {"_id": None, "max": {"$max": f"${field}"}}},
             {"$project": {"_id": 0, "max": 1}},
         ]
 
-        result: List[Dict[str, Any]] = cast(
-            List[Dict[str, Any]],
+        result: list[dict[str, Any]] = cast(
+            list[dict[str, Any]],
             await self.aggregate(
                 aggregation_pipeline=pipeline,
                 session=session,
@@ -149,10 +149,10 @@ class AggregateMethods:
 
     async def min(
         self,
-        field: Union[str, ExpressionField],
-        session: Optional[AsyncIOMotorClientSession] = None,
+        field: ExpressionField | str | Any,
+        session: AsyncClientSession | None = None,
         ignore_cache: bool = False,
-    ) -> Optional[float]:
+    ) -> Any | None:
         """
         Min of the values of the given field
 
@@ -167,17 +167,17 @@ class AggregateMethods:
         min_count = await Document.find(Sample.price <= 100).min(Sample.count)
         ```
 
-        :param field: Union[str, ExpressionField]
-        :param session: Optional[AsyncIOMotorClientSession] - motor session
-        :return: float - min. None if there are no items.
+        :param field: Union[ExpressionField, str, Any]
+        :param session: Optional[AsyncClientSession] - pymongo session
+        :return: Any - min value. None if there are no items.
         """
         pipeline = [
             {"$group": {"_id": None, "min": {"$min": f"${field}"}}},
             {"$project": {"_id": 0, "min": 1}},
         ]
 
-        result: List[Dict[str, Any]] = cast(
-            List[Dict[str, Any]],
+        result: list[dict[str, Any]] = cast(
+            list[dict[str, Any]],
             await self.aggregate(
                 aggregation_pipeline=pipeline,
                 session=session,

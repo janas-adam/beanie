@@ -1,6 +1,7 @@
-from typing import List
+from pydantic import Field
 
 from beanie import Document, Indexed, Link
+from beanie.odm.fields import BackLink
 
 
 class WindowAPI(Document):
@@ -17,6 +18,18 @@ class RoofAPI(Document):
 
 
 class HouseAPI(Document):
-    windows: List[Link[WindowAPI]]
+    windows: list[Link[WindowAPI]]
     name: Indexed(str)
     height: Indexed(int) = 2
+
+
+class House(Document):
+    name: str
+    owner: Link["Person"]
+
+
+class Person(Document):
+    name: str
+    house: BackLink[House] = Field(
+        json_schema_extra={"original_field": "owner"}
+    )

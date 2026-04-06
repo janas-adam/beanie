@@ -3,12 +3,10 @@ from datetime import date, datetime
 from enum import Enum
 from uuid import uuid4
 
-import pytest
 from bson import Binary, Regex
 from pydantic import AnyUrl
 
 from beanie.odm.utils.encoder import Encoder
-from beanie.odm.utils.pydantic import IS_PYDANTIC_V2
 from tests.odm.models import (
     BsonRegexDoc,
     Child,
@@ -18,6 +16,7 @@ from tests.odm.models import (
     DocumentWithComplexDictKey,
     DocumentWithDecimalField,
     DocumentWithEnumKeysDict,
+    DocumentWithExcludedField,
     DocumentWithHttpUrlField,
     DocumentWithKeepNullsFalse,
     DocumentWithStringField,
@@ -92,7 +91,7 @@ async def test_bytes():
     assert isinstance(new_doc.bytes_field, bytes)
 
 
-async def test_bytes_already_binary():
+def test_bytes_already_binary():
     b = Binary(b"123", 3)
     encoded_b = Encoder().encode(b)
     assert isinstance(encoded_b, Binary)
@@ -138,7 +137,13 @@ def test_keep_nulls_false():
     assert encoded_doc == {"m": {"i": 10}}
 
 
-@pytest.mark.skipif(not IS_PYDANTIC_V2, reason="Test only for Pydantic v2")
+def test_excluded():
+    doc = DocumentWithExcludedField(included_field=1, excluded_field=2)
+    encoded_doc = Encoder().encode(doc)
+    assert "included_field" in encoded_doc
+    assert "excluded_field" not in encoded_doc
+
+
 def test_should_encode_pydantic_v2_url_correctly():
     url = AnyUrl("https://example.com")
     encoder = Encoder()

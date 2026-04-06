@@ -1,12 +1,6 @@
-import motor.motor_asyncio
 import pytest
-
-from beanie.odm.utils.pydantic import IS_PYDANTIC_V2
-
-if IS_PYDANTIC_V2:
-    from pydantic_settings import BaseSettings
-else:
-    from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
+from pymongo import AsyncMongoClient
 
 
 class Settings(BaseSettings):
@@ -14,16 +8,17 @@ class Settings(BaseSettings):
     mongodb_db_name: str = "beanie_db"
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def settings():
     return Settings()
 
 
-@pytest.fixture()
-def cli(settings):
-    return motor.motor_asyncio.AsyncIOMotorClient(settings.mongodb_dsn)
+@pytest.fixture(scope="session")
+async def cli(settings):
+    async with AsyncMongoClient(settings.mongodb_dsn) as client:
+        yield client
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def db(cli, settings):
     return cli[settings.mongodb_db_name]
